@@ -5,6 +5,7 @@ import absl.flags
 import iree.compiler.tools as compiler
 import jax
 import jax.numpy as jnp
+import optax
 import numpy as np
 import pathlib
 
@@ -39,12 +40,16 @@ def CreateGpt2Model(name, B, K, S, T):
   pad = 32 - (params[0].shape[0] % 32)
   params[0] = np.pad(params[0], ((0, pad), (0, 0)), constant_values=[-1.])
 
+  adam = optax.adamw(learning_rate=3e-4)
+  opt_state = adam.init(params)
+
   class Gpt2Module(Program):
-    _params = Program.export_global(params, initialize=True)
+    _params = Program.export_global(params, initialize=True, mutable=True)
     _kv_state = Program.export_global(kv_type)
     _x_state = Program.export_global(x_type)
     _t_state = Program.export_global(t_type)
-
+    _opt_state = Program.export_global(opt_state, initialize=True, mutable=True)
+    
     @Program.kernel
     def _encode(params, prompt, t):
       kv = model.init_kv(1, S, L, Q, H, dtype=jnp.float32)
@@ -75,14 +80,18 @@ def CreateGpt2Model(name, B, K, S, T):
       return x
 
     @Program.kernel
-    def _finetune(params, text, t):
-      kv = model.init_kv(1, S, L, Q, H, dtype=jnp.float32)
-      kv = [jnp.tile(k, (1, text.shape[0], 1, 1, 1)) for k in kv]
-      kv, x = model.encode(params, kv, text, 0, t)
-      return kv, x
+    def _train_step(params, opt_state, kv, text, target, t):
+      grads = jax.grad(model.loss)(params, kv, text, target, t)
+      updates, new_opt_state = adam.update(grads, opt_state, params)
+      new_params = optax.apply_updates(params, updates)
+      return new_params, new_opt_state
 
-    def finetune(self, text=text_type, t=t_type):
-      kv, x = self._finetune(self._params, text, t)
+    def finetune(self, text=text_type, target=text_type, t=t_type):
+      new_params, new_opt_state = self._train_step(self._params, self._opt_state, self._kv_state, text, target, t)
+      new_params, new_opt_state = self._train_step(self._params, self._opt_state, self._kv_state, text, target, t)
+      new_params, new_opt_state = self._train_step(self._params, self._opt_state, self._kv_state, text, target, t)
+      store_global(self._params, new_params)
+      store_global(self._opt_state, new_opt_state)
       
   return Gpt2Module
 
