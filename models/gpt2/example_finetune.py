@@ -22,6 +22,7 @@ L, _, _, Q, H, _ = model.model_sizes["gpt2"]
 
 adam = optax.adamw(learning_rate=3e-4)
 
+@jax.jit
 def _train_step(params, opt_state, kv, text, target, t):
     grads = jax.grad(model.loss)(params, kv, text, target, t)
     assert len(grads) == len(params)
