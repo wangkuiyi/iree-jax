@@ -27,6 +27,7 @@ def CreateGpt2Model(name, B, K, S, T):
   L, _, _, Q, H, _ = model.model_sizes[name]
 
   prompt_type = ShapedArray((B,K), dtype=jnp.int32)
+  text_type = ShapedArray((B,S), dtype=jnp.int32)
   t_type = ShapedArray((B,), dtype=jnp.int32)
   x_type = ShapedArray((B, T), dtype=jnp.int32)
   kv_type = model.init_kv(B, S, L, Q, H, dtype=jnp.float32, abstract=True)
@@ -73,6 +74,16 @@ def CreateGpt2Model(name, B, K, S, T):
       store_global(self._t_state, t)
       return x
 
+    @Program.kernel
+    def _finetune(params, text, t):
+      kv = model.init_kv(1, S, L, Q, H, dtype=jnp.float32)
+      kv = [jnp.tile(k, (1, text.shape[0], 1, 1, 1)) for k in kv]
+      kv, x = model.encode(params, kv, text, 0, t)
+      return kv, x
+
+    def finetune(self, text=text_type, t=t_type):
+      kv, x = self._finetune(self._params, text, t)
+      
   return Gpt2Module
 
 def main(argv):
